@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Public Gateway</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1c1e21; --muted:#5f6670; --line:#d9dde3; --accent:#0b6bcb; --accent-text:#fff; --ok:#1f8f4e; --bad:#c62828; --warn:#b26a00; --code:#f0f2f5; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#121417; --card:#1b1e23; --text:#e8eaed; --muted:#9aa3ad; --line:#2d323a; --accent:#5aa2ff; --accent-text:#0b1220; --ok:#4cc27a; --bad:#ff6b6b; --warn:#f0b64a; --code:#0f1114; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  label { display:block; font-weight: 600; margin: 10px 0 4px; }
+  input[type=text], input[type=password], input[type=number], select, textarea { width:100%; padding: 9px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font-size: 15px; }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; min-height: 230px; }
+  button { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor:pointer; font-size: 14px; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.danger { color: var(--bad); }
+  button:disabled { opacity:.5; cursor: default; }
+  .row { display:flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .msg { padding: 10px 12px; border-radius: 8px; margin-top: 12px; display:none; white-space: pre-wrap; }
+  .msg.err { display:block; background: rgba(198,40,40,.12); color: var(--bad); }
+  .msg.ok { display:block; background: rgba(31,143,78,.12); color: var(--ok); }
+  .msg.warn { display:block; background: rgba(178,106,0,.12); color: var(--warn); }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  pre { background: var(--code); padding: 10px; border-radius: 8px; overflow:auto; font-size: 13px; }
+  table { width:100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align:left; padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; background: var(--muted); }
+  .dot.on { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  details { margin-top: 10px; }
+  summary { cursor:pointer; font-weight:600; }
+  #qr { margin-top: 12px; display:inline-block; padding: 10px; background:#fff; border-radius: 8px; }
+  #qr:empty { display:none; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Public Gateway</h1>
+  <p class="sub" id="server-line">Підключення пристроїв до шлюзу WireGuard</p>
+
+  <section class="card" id="auth-card">
+    <h2>Доступ</h2>
+    <form id="auth-form">
+      <label for="token">API-токен (значення <code>API_TOKEN</code> з <code>.env</code> на VPS)</label>
+      <input type="password" id="token" autocomplete="current-password" placeholder="вставити токен">
+      <div class="row">
+        <button type="submit" class="primary" id="btn-login">Увійти</button>
+        <label style="margin:0; font-weight:400"><input type="checkbox" id="remember"> запам'ятати у цьому браузері</label>
+        <button type="button" id="btn-logout" class="hidden">Вийти</button>
+      </div>
+    </form>
+    <div class="msg" id="auth-msg"></div>
+  </section>
+
+  <div id="app" class="hidden">
+    <section class="card">
+      <h2>Підключити пристрій</h2>
+      <label for="name">Назва пристрою</label>
+      <input type="text" id="name" placeholder="laptop" pattern="[a-z][a-z0-9_-]{0,31}" autocomplete="off">
+      <div class="hint">1–32 символи: a-z, 0-9, _ або -. Та сама назва повторно повертає ту саму VPN-адресу.</div>
+      <label>Ключ пристрою</label>
+      <label style="font-weight:400"><input type="radio" name="keymode" value="browser" checked> згенерувати у браузері — приватний ключ не передається на сервер</label>
+      <label style="font-weight:400"><input type="radio" name="keymode" value="server"> нехай згенерує сервер — простіше, але приватний ключ прийде у відповіді</label>
+      <div class="row">
+        <button class="primary" id="btn-provision">Отримати конфігурацію</button>
+      </div>
+      <div class="msg" id="prov-msg"></div>
+
+      <div id="result" class="hidden">
+        <p class="hint" id="result-info"></p>
+        <textarea id="config" readonly spellcheck="false"></textarea>
+        <div class="row">
+          <button class="primary" id="btn-download">Завантажити .conf</button>
+          <button id="btn-copy">Скопіювати</button>
+          <button id="btn-qr">Показати QR для телефона</button>
+        </div>
+        <div id="qr"></div>
+        <div class="msg warn" id="result-warn"></div>
+        <details>
+          <summary>Як підключитися</summary>
+          <p><b>Linux:</b> збережи файл як <code>/etc/wireguard/pgw0.conf</code> з правами 600, далі <code>sudo systemctl enable --now wg-quick@pgw0</code>.</p>
+          <p><b>Windows / macOS:</b> у застосунку WireGuard «Import tunnel(s) from file» і вибери завантажений файл.</p>
+          <p><b>Android / iOS:</b> у застосунку WireGuard «+» → «Scan from QR code» і відскануй код вище.</p>
+          <p>Перевірка: <code>ping <span class="gw-ip"></span></code>. Програма на пристрої має слухати свою VPN-адресу, а не лише 127.0.0.1.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Пристрої</h2>
+      <table id="peers"><thead><tr><th>Назва</th><th>VPN-адреса</th><th>Стан</th><th>Маршрути</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="hint" id="peers-empty">Ще немає пристроїв.</div>
+    </section>
+
+    <section class="card">
+      <h2>Публічні маршрути</h2>
+      <table id="sites"><thead><tr><th>Адреса</th><th>Пристрій</th><th>Порт</th><th>Стан програми</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="hint" id="sites-empty">Жодну програму не опубліковано. За IP шлюз відповідає заглушкою 404.</div>
+      <details>
+        <summary>Додати або перемкнути маршрут</summary>
+        <div class="grid">
+          <div><label for="site-host">Домен або IP VPS</label><input type="text" id="site-host" placeholder="app.example.com"></div>
+          <div><label for="site-peer">Пристрій</label><select id="site-peer"></select></div>
+          <div><label for="site-port">Порт програми на пристрої</label><input type="number" id="site-port" value="3000" min="1" max="65535"></div>
+          <div><label for="site-backup">Резервний пристрій</label><select id="site-backup"><option value="">немає</option></select></div>
+          <div><label style="margin-top:34px; font-weight:400"><input type="checkbox" id="site-http"> дозволити HTTP за IP (лише для тесту)</label></div>
+        </div>
+        <div class="row">
+          <button class="primary" id="btn-site">Зберегти маршрут</button>
+          <button id="btn-check">Перевірити програму через VPN</button>
+        </div>
+        <div class="hint">Для домену потрібен A-запис на адресу VPS; сертифікат Caddy отримає сам. Той самий домен з іншим пристроєм перемикає маршрут. Резервний пристрій має запускати ту саму програму на тому самому порту: коли основний недоступний, трафік іде на резервний і повертається сам, щойно основний відповідає.</div>
+        <div class="msg" id="site-msg"></div>
+      </details>
+    </section>
+
+    <section class="card">
+      <h2>Прокинуті порти (TCP)</h2>
+      <table id="ports"><thead><tr><th>На VPS</th><th>Пристрій</th><th>Порт на пристрої</th><th>Стан</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="hint" id="ports-empty">Жоден порт не прокинуто.</div>
+      <details>
+        <summary>Прокинути порт</summary>
+        <div class="grid">
+          <div><label for="fwd-listen">Порт на VPS</label><input type="number" id="fwd-listen" placeholder="3001" min="1" max="65535"></div>
+          <div><label for="fwd-peer">Пристрій</label><select id="fwd-peer"></select></div>
+          <div><label for="fwd-port">Порт на пристрої (порожньо = той самий)</label><input type="number" id="fwd-port" min="1" max="65535"></div>
+        </div>
+        <div class="row"><button class="primary" id="btn-fwd">Прокинути</button></div>
+        <div class="hint" id="fwd-hint">Трафік передається як є (будь-який TCP, без TLS на VPS). Доступні порти: 80, 443 і діапазон <code id="fwd-range">PORT_RANGE</code> з <code>.env</code>. 80/443 вільні лише коли Caddy вимкнено (<code>CADDY_REPLICAS=0</code>).</div>
+        <div class="msg" id="fwd-msg"></div>
+      </details>
+    </section>
+
+    <section class="card">
+      <div class="row" style="margin-top:0">
+        <button id="btn-refresh">Оновити</button>
+        <span class="hint" id="status-line"></span>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script src="/wg-keys.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" crossorigin="anonymous"></script>
+<script>
+(function () {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const STORE_KEY = "pgw.token";
+  let token = "";
+  let status = null;
+  let lastConfig = null;
+
+  function show(id, kind, text) { const el = $(id); el.className = "msg " + (kind || ""); el.textContent = text || ""; if (!text) el.className = "msg"; }
+  function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+  async function api(method, path, body) {
+    const res = await fetch(path, {
+      method, headers: { "X-API-Token": token, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body), cache: "no-store",
+    });
+    let data = {};
+    try { data = await res.json(); } catch (e) { data = { ok: false, error: "Некоректна відповідь сервера" }; }
+    if (res.status === 401) { logout(); throw new Error("Невірний токен."); }
+    if (!res.ok || data.ok === false) throw new Error(data.error || ("HTTP " + res.status));
+    return data;
+  }
+
+  function saveToken() {
+    try { sessionStorage.setItem(STORE_KEY, token); if ($("remember").checked) localStorage.setItem(STORE_KEY, token); } catch (e) {}
+  }
+  function loadToken() {
+    try { return sessionStorage.getItem(STORE_KEY) || localStorage.getItem(STORE_KEY) || ""; } catch (e) { return ""; }
+  }
+  function logout() {
+    token = "";
+    try { sessionStorage.removeItem(STORE_KEY); localStorage.removeItem(STORE_KEY); } catch (e) {}
+    $("app").classList.add("hidden"); $("btn-logout").classList.add("hidden"); $("token").value = "";
+    $("server-line").textContent = "Підключення пристроїв до шлюзу WireGuard";
+  }
+
+  async function login() {
+    token = $("token").value.trim();
+    if (!token) { show("auth-msg", "err", "Введи токен."); return; }
+    try {
+      await refresh();
+      saveToken();
+      show("auth-msg", "", "");
+      $("app").classList.remove("hidden"); $("btn-logout").classList.remove("hidden");
+    } catch (e) { show("auth-msg", "err", e.message); }
+  }
+
+  async function refresh() {
+    status = await api("GET", "/status");
+    $("server-line").textContent = `Шлюз ${status.endpoint} · VPN ${status.subnet} · шлюз у VPN ${status.gateway_ip}`;
+    document.querySelectorAll(".gw-ip").forEach(el => el.textContent = status.gateway_ip);
+    const wg = status.wireguard_running ? "WireGuard працює" : "WireGuard НЕ працює";
+    const cd = status.caddy_running ? "Caddy працює" : "Caddy НЕ працює";
+    $("status-line").textContent = `${wg} · ${cd}`;
+    $("fwd-range").textContent = status.port_range || "не задано";
+    renderPeers(); renderSites(); renderPorts();
+  }
+
+  function renderPeers() {
+    const tbody = $("peers").querySelector("tbody"); tbody.innerHTML = "";
+    const sel = $("site-peer"); const chosen = sel.value; sel.innerHTML = "";
+    const fsel = $("fwd-peer"); const fchosen = fsel.value; fsel.innerHTML = "";
+    const bsel = $("site-backup"); const bchosen = bsel.value; bsel.innerHTML = '<option value="">немає</option>';
+    for (const p of status.peers) {
+      const tr = document.createElement("tr");
+      const seen = p.last_handshake ? new Date(p.last_handshake * 1000).toLocaleString() : "ще не підключався";
+      tr.innerHTML = `<td>${esc(p.name)}</td><td><code>${esc(p.address)}</code></td>` +
+        `<td><span class="dot ${p.online ? "on" : ""}"></span>${p.online ? "online" : "offline"}<div class="hint">${esc(seen)}</div></td>` +
+        `<td>${[...p.sites.map(esc), ...p.backup_sites.map(h => esc(h) + " <span class='hint'>(резерв)</span>")].join("<br>") || "<span class='hint'>—</span>"}</td>` +
+        `<td><button class="danger" data-revoke="${esc(p.name)}">Відкликати</button></td>`;
+      tbody.appendChild(tr);
+      const opt = document.createElement("option"); opt.value = p.name; opt.textContent = `${p.name} (${p.address})`; sel.appendChild(opt);
+      fsel.appendChild(opt.cloneNode(true));
+      bsel.appendChild(opt.cloneNode(true));
+    }
+    if (chosen) sel.value = chosen;
+    if (fchosen) fsel.value = fchosen;
+    if (bchosen) bsel.value = bchosen;
+    $("peers-empty").classList.toggle("hidden", status.peers.length > 0);
+  }
+
+  function renderSites() {
+    const tbody = $("sites").querySelector("tbody"); tbody.innerHTML = "";
+    for (const s of status.sites) {
+      const tr = document.createElement("tr");
+      const chain = [esc(s.peer), ...s.backups.map(b => `<span class="hint">→ ${esc(b)} (резерв)</span>`)].join("<br>");
+      tr.innerHTML = `<td>${esc(s.scheme)}://${esc(s.host)}</td><td>${chain}</td><td>${esc(s.port)}</td>` +
+        `<td class="site-state"><span class="dot"></span>перевіряю…</td>` +
+        `<td><button class="danger" data-site-del="${esc(s.host)}">Прибрати</button></td>`;
+      tbody.appendChild(tr);
+      checkSite(s, tr.querySelector(".site-state"));
+    }
+    $("sites-empty").classList.toggle("hidden", status.sites.length > 0);
+  }
+
+  // "online" in the devices table only means the WireGuard tunnel is up. This asks the
+  // gateway to open the app through the VPN, so the state reflects what visitors get.
+  async function checkOne(name, port) {
+    const peer = status.peers.find(p => p.name === name);
+    if (peer && !peer.online) return { ok: false, error: "пристрій offline" };
+    try { return await api("POST", `/peers/${encodeURIComponent(name)}/check`, { port }); }
+    catch (e) { return { ok: false, error: e.message }; }
+  }
+
+  // Devices are checked in the same order Caddy tries them: primary first, then backups.
+  async function checkSite(site, cell) {
+    const names = [site.peer, ...site.backups];
+    const results = await Promise.all(names.map(n => checkOne(n, site.port)));
+    if (!cell.isConnected) return;
+    const serving = results.findIndex(r => r.ok);
+    const lines = names.map((n, i) => results[i].ok ? `${esc(n)}: HTTP ${esc(results[i].http_status)}` : `${esc(n)}: ${esc(results[i].error)}`);
+    if (serving < 0) {
+      cell.innerHTML = `<span class="dot bad"></span>недоступна<div class="hint">${lines.join("<br>")}<br>відвідувачі бачать сторінку техробіт</div>`;
+    } else if (serving === 0) {
+      cell.innerHTML = `<span class="dot on"></span>доступна<div class="hint">${lines.join("<br>")}</div>`;
+    } else {
+      cell.innerHTML = `<span class="dot on"></span>доступна через резерв ${esc(names[serving])}<div class="hint">${lines.join("<br>")}</div>`;
+    }
+  }
+
+  function renderPorts() {
+    const tbody = $("ports").querySelector("tbody"); tbody.innerHTML = "";
+    for (const f of status.ports) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td><code>${esc(status.endpoint.split(":")[0])}:${esc(f.listen)}</code></td><td>${esc(f.peer)}</td><td>${esc(f.port)}</td>` +
+        `<td><span class="dot ${f.active ? "on" : ""}"></span>${f.active ? "слухає" : "не піднято"}</td>` +
+        `<td><button class="danger" data-port-del="${esc(f.listen)}">Прибрати</button></td>`;
+      tbody.appendChild(tr);
+    }
+    $("ports-empty").classList.toggle("hidden", status.ports.length > 0);
+  }
+
+  async function forwardPort() {
+    show("fwd-msg", "", "");
+    const listen = parseInt($("fwd-listen").value, 10), peer = $("fwd-peer").value;
+    const port = $("fwd-port").value ? parseInt($("fwd-port").value, 10) : listen;
+    if (!listen || !peer) { show("fwd-msg", "err", "Вкажи порт на VPS і пристрій."); return; }
+    try {
+      const data = await api("PUT", "/ports/" + listen, { peer, port });
+      show("fwd-msg", "ok", data.note || "Прокинуто.");
+      await refresh();
+    } catch (e) { show("fwd-msg", "err", e.message); }
+  }
+
+  async function provision() {
+    const name = $("name").value.trim();
+    const mode = document.querySelector("input[name=keymode]:checked").value;
+    show("prov-msg", "", ""); $("result").classList.add("hidden"); $("qr").innerHTML = "";
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) { show("prov-msg", "err", "Некоректна назва пристрою."); return; }
+    $("btn-provision").disabled = true;
+    try {
+      let keys = null, body = { name };
+      if (mode === "browser") { keys = WGKeys.generateKeyPair(); body.pubkey = keys.publicKey; }
+      const data = await api("POST", "/provision", body);
+      let config = data.config;
+      if (keys) {
+        if (/^\s*PrivateKey\s*=/im.test(config)) throw new Error("Сервер повернув PrivateKey, хоча ключ генерував браузер.");
+        config = config.replace(/^(\[Interface\][ \t]*)$/m, `$1\nPrivateKey = ${keys.privateKey}`);
+      }
+      lastConfig = { name, config, address: data.address };
+      $("config").value = config;
+      $("result-info").textContent = `${data.created ? "Створено" : "Повернуто наявний"} пристрій ${name}: VPN-адреса ${data.address}, endpoint ${data.endpoint}:${data.port}.`;
+      show("result-warn", "warn", keys
+        ? "Приватний ключ існує лише на цій сторінці. Збережи файл зараз: після оновлення сторінки його не відновити, а повторний запит із тією ж назвою видасть новий ключ і замінить старий."
+        : "Приватний ключ згенерував сервер і передав його у відповіді. Не пересилай цей файл і не запускай його на двох пристроях.");
+      $("result").classList.remove("hidden");
+      await refresh();
+    } catch (e) { show("prov-msg", "err", e.message); }
+    finally { $("btn-provision").disabled = false; }
+  }
+
+  function download() {
+    if (!lastConfig) return;
+    const blob = new Blob([lastConfig.config], { type: "text/plain" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `pgw0-${lastConfig.name}.conf`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+
+  async function copy() {
+    if (!lastConfig) return;
+    try { await navigator.clipboard.writeText(lastConfig.config); show("prov-msg", "ok", "Скопійовано."); }
+    catch (e) { $("config").select(); show("prov-msg", "warn", "Буфер недоступний; виділено текст — скопіюй вручну."); }
+  }
+
+  function qr() {
+    if (!lastConfig) return;
+    $("qr").innerHTML = "";
+    if (typeof QRCode === "undefined") { show("prov-msg", "warn", "Бібліотека QR не завантажилась (немає доступу до cdnjs). Використай файл."); return; }
+    // Comments are dropped: WireGuard ignores them and the QR library mishandles non-ASCII text.
+    const payload = lastConfig.config.split("\n").filter(l => !l.trim().startsWith("#")).join("\n").trim() + "\n";
+    try {
+      new QRCode($("qr"), { text: payload, width: 280, height: 280, correctLevel: QRCode.CorrectLevel.M });
+      show("prov-msg", "ok", "Відскануй QR застосунком WireGuard на телефоні.");
+    } catch (e) { $("qr").innerHTML = ""; show("prov-msg", "err", "Не вдалося побудувати QR: " + e.message); }
+  }
+
+  async function saveSite() {
+    show("site-msg", "", "");
+    const host = $("site-host").value.trim(), peer = $("site-peer").value, port = parseInt($("site-port").value, 10);
+    if (!host || !peer || !port) { show("site-msg", "err", "Заповни адресу, пристрій і порт."); return; }
+    try {
+      const backup = $("site-backup").value;
+      if (backup === peer) { show("site-msg", "err", "Резервний пристрій має відрізнятися від основного."); return; }
+      const data = await api("PUT", "/sites/" + encodeURIComponent(host), { peer, port, allow_http: $("site-http").checked, backups: backup ? [backup] : [] });
+      show("site-msg", "ok", data.note || "Збережено.");
+      await refresh();
+    } catch (e) { show("site-msg", "err", e.message); }
+  }
+
+  async function checkPeer() {
+    show("site-msg", "", "");
+    const peer = $("site-peer").value, port = parseInt($("site-port").value, 10);
+    if (!peer || !port) { show("site-msg", "err", "Вибери пристрій і порт."); return; }
+    try {
+      const data = await api("POST", `/peers/${encodeURIComponent(peer)}/check`, { port });
+      show("site-msg", data.ok ? "ok" : "err", data.ok ? `Програма відповідає через VPN: HTTP ${data.http_status} з ${data.url}` : `Немає відповіді з ${data.url}: ${data.error}`);
+    } catch (e) { show("site-msg", "err", e.message); }
+  }
+
+  document.addEventListener("click", async ev => {
+    const revoke = ev.target.closest("[data-revoke]"), siteDel = ev.target.closest("[data-site-del]");
+    if (revoke) {
+      const name = revoke.dataset.revoke;
+      if (!confirm(`Відкликати пристрій ${name}? Його тунель закриється, а маршрути на нього буде прибрано.`)) return;
+      try { await api("DELETE", `/peers/${encodeURIComponent(name)}?remove_sites=1`); await refresh(); }
+      catch (e) { alert(e.message); }
+    }
+    const portDel = ev.target.closest("[data-port-del]");
+    if (portDel) {
+      if (!confirm(`Прибрати прокидання порту ${portDel.dataset.portDel}?`)) return;
+      try { await api("DELETE", `/ports/${portDel.dataset.portDel}`); await refresh(); }
+      catch (e) { alert(e.message); }
+    }
+    if (siteDel) {
+      const host = siteDel.dataset.siteDel;
+      if (!confirm(`Прибрати маршрут ${host}?`)) return;
+      try { await api("DELETE", `/sites/${encodeURIComponent(host)}`); await refresh(); }
+      catch (e) { alert(e.message); }
+    }
+  });
+
+  $("auth-form").addEventListener("submit", ev => { ev.preventDefault(); login(); });
+  $("btn-logout").addEventListener("click", logout);
+  $("btn-provision").addEventListener("click", provision);
+  $("name").addEventListener("keydown", ev => { if (ev.key === "Enter") provision(); });
+  $("btn-download").addEventListener("click", download);
+  $("btn-copy").addEventListener("click", copy);
+  $("btn-qr").addEventListener("click", qr);
+  $("btn-site").addEventListener("click", saveSite);
+  $("btn-check").addEventListener("click", checkPeer);
+  $("btn-fwd").addEventListener("click", forwardPort);
+  $("btn-refresh").addEventListener("click", () => refresh().catch(e => show("auth-msg", "err", e.message)));
+
+  const saved = loadToken();
+  if (saved) { $("token").value = saved; login(); }
+})();
+</script>
+</body>
+</html>

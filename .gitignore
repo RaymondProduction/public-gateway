@@ -1,0 +1,8 @@
+.env
+data/
+caddy/*
+!caddy/.gitkeep
+__pycache__/
+*.pyc
+backups/
+*.zip

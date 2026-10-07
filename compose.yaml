@@ -1,0 +1,152 @@
+name: public-gateway
+
+x-api: &api
+  build: ./api
+  image: public-gateway-api:0.2
+  pull_policy: never
+  environment:
+    SERVER_ENDPOINT: ${SERVER_ENDPOINT:?Set SERVER_ENDPOINT in .env}
+    API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+    VPN_SUBNET: ${VPN_SUBNET:-10.77.0.0/24}
+    WG_MTU: ${WG_MTU:-1380}
+    PORT_RANGE: ${PORT_RANGE:-3000-3019}
+  logging:
+    driver: local
+    options:
+      max-size: "5m"
+      max-file: "3"
+
+services:
+  # One-shot: creates server keys on first run and regenerates wg0.conf/Caddyfile from state.
+  init:
+    <<: *api
+    command: ["init"]
+    restart: "no"
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=4m,mode=1777
+    volumes:
+      - ./data/state:/state
+      - ./data/wireguard:/wireguard
+      - ./caddy:/etc/caddy
+
+  wireguard:
+    image: ${WIREGUARD_IMAGE:-lscr.io/linuxserver/wireguard:latest}
+    restart: unless-stopped
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PUID: "0"
+      PGID: "0"
+      TZ: ${TZ:-Europe/Kyiv}
+      LOG_CONFS: "false"
+      # PEERS is intentionally absent: the gateway supplies wg0.conf itself.
+    ports:
+      - "0.0.0.0:51820:51820/udp"
+      - "0.0.0.0:80:80/tcp"
+      - "0.0.0.0:443:443/tcp"
+      # Gateway API lives in this network namespace; API_BIND=127.0.0.1 keeps it host-only.
+      - "${API_BIND:-0.0.0.0}:${API_PORT:-8080}:8080/tcp"
+      # TCP ports available for forwarding to devices (PUT /ports/<n>); change needs `up -d`.
+      - "0.0.0.0:${PORT_RANGE:-3000-3019}:${PORT_RANGE:-3000-3019}/tcp"
+    volumes:
+      - ./data/wireguard:/config
+      - ./scripts/vpn-firewall.sh:/opt/gateway/vpn-firewall.sh:ro
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv4.conf.all.src_valid_mark: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "wg show wg0 >/dev/null 2>&1 && iptables -C INPUT -i wg0 -j PGW_INPUT && iptables -C FORWARD -i wg0 -j DROP"]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    # CADDY_REPLICAS=0 disables Caddy so that 80/443 can be forwarded to a device instead.
+    deploy:
+      replicas: ${CADDY_REPLICAS:-1}
+    entrypoint: ["caddy"]
+    command: ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    restart: unless-stopped
+    network_mode: "service:wireguard"
+    depends_on:
+      wireguard:
+        condition: service_healthy
+        restart: true
+    user: "0:0"
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - ./data/caddy-data:/data
+      - ./data/caddy-config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: local
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  # HTTP API: provisions peers, manages routes, applies changes to the live wg0 and Caddy.
+  api:
+    <<: *api
+    command: ["serve"]
+    restart: unless-stopped
+    network_mode: "service:wireguard"
+    depends_on:
+      wireguard:
+        condition: service_healthy
+        restart: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN   # wg syncconf on the shared wg0
+      - CHOWN       # write generated files regardless of bind-mount ownership
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=4m,mode=1777
+    volumes:
+      - ./data/state:/state
+      - ./data/wireguard:/wireguard
+      - ./caddy:/etc/caddy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
